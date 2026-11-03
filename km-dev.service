@@ -1,0 +1,16 @@
+[Unit]
+Description=KM DEV VPS Deploy Discord Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/km-dev-vps-bot
+ExecStart=/usr/bin/node /opt/km-dev-vps-bot/src/index.js
+Restart=always
+RestartSec=5
+User=root
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
