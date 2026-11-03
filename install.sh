@@ -48,46 +48,29 @@ REPO="https://github.com/brevengop-ux/vps-deploy-bot.git"
 
 if [ -e "$APP_DIR" ]; then
     echo "Installation directory already exists."
-    echo "Please check $APP_DIR before continuing."
     exit 1
 fi
-
-echo ""
-echo "Installing system dependencies..."
 
 apt-get update
 apt-get install -y git curl ca-certificates
 
-echo ""
-echo "Downloading KM DEV..."
-
 git clone "$REPO" "$APP_DIR"
 cd "$APP_DIR"
 
-echo ""
-echo "Running OS setup..."
 bash "$SETUP"
 
-echo ""
-echo "Checking Node.js..."
-
 if ! command -v node >/dev/null 2>&1; then
-    echo "Node.js is not installed."
+    echo "Node.js is missing."
     exit 1
 fi
 
 NODE_MAJOR=$(node -p "process.versions.node.split('.')[0]")
 
 if [ "$NODE_MAJOR" -lt 20 ]; then
-    echo "Node.js 20 or newer is required."
-    echo "Detected version: $(node --version)"
+    echo "Node.js 20+ required. Detected: $(node --version)"
     exit 1
 fi
 
-echo "Node.js version: $(node --version)"
-
-echo ""
-echo "Installing bot dependencies..."
 npm install --omit=dev
 
 echo ""
@@ -98,17 +81,22 @@ echo "================================"
 bash configure.sh
 
 echo ""
-echo "Checking service file..."
+echo "Creating dedicated service user..."
 
-if [ ! -f km-dev.service ]; then
-    echo "Error: km-dev.service not found."
+if ! id kmdev >/dev/null 2>&1; then
+    useradd --system --create-home --shell /usr/sbin/nologin kmdev
+fi
+
+chown -R kmdev:kmdev "$APP_DIR"
+chmod 600 "$APP_DIR/.env"
+
+if [ ! -f "$APP_DIR/km-dev.service" ]; then
+    echo "km-dev.service not found."
     exit 1
 fi
 
-echo ""
-echo "Installing KM DEV service..."
-
-cp km-dev.service /etc/systemd/system/km-dev.service
+install -m 644 "$APP_DIR/km-dev.service" \
+    /etc/systemd/system/km-dev.service
 
 systemctl daemon-reload
 systemctl enable km-dev
@@ -117,10 +105,6 @@ echo ""
 echo "================================"
 echo "       KM DEV INSTALLED"
 echo "================================"
-
-echo "Project directory: $APP_DIR"
-echo "Configuration saved in .env"
-echo "Service enabled for system startup."
-echo ""
-echo "IMPORTANT: Service has not been started yet."
-echo "The service permissions must be configured first."
+echo "Dedicated user: kmdev"
+echo "Service enabled."
+echo "Service is not started yet."
