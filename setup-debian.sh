@@ -1,5 +1,6 @@
+
 #!/bin/bash
-set -e
+set -euo pipefail
 
 echo "================================"
 echo "          KM DEV"
@@ -11,17 +12,45 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-if ! grep -qi debian /etc/os-release; then
+. /etc/os-release
+
+if [ "$ID" != "debian" ]; then
     echo "This installer supports Debian only."
     exit 1
 fi
 
+echo ""
+echo "Updating Debian packages..."
+
 apt-get update
 
 apt-get install -y \
-    curl git ca-certificates \
-    build-essential python3
+    curl \
+    git \
+    ca-certificates \
+    build-essential \
+    python3
 
 echo ""
-echo "Debian dependencies installed successfully."
-echo "Next: KM DEV bot setup."
+echo "Installing Node.js 22 LTS..."
+
+curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource_setup.sh
+bash /tmp/nodesource_setup.sh
+rm -f /tmp/nodesource_setup.sh
+
+apt-get install -y nodejs
+
+echo ""
+echo "Checking installations..."
+
+node --version
+npm --version
+git --version
+python3 --version
+
+echo ""
+echo "================================"
+echo " DEBIAN DEPENDENCIES INSTALLED"
+echo "================================"
+echo "Node.js 22 LTS ready."
+echo "Next: KM DEV bot configuration."
