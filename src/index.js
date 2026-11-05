@@ -1,4 +1,13 @@
 const {
+  createVps,
+  listVps,
+  getInfo,
+  startVps,
+  stopVps,
+  restartVps
+} = require("./docker");
+
+const {
   Client,
   GatewayIntentBits,
   Events,
