@@ -2,15 +2,6 @@ const {
   Client,
   GatewayIntentBits,
   Events,
-  // ...
-} = require("discord.js");
-
-require("dotenv").config();
-
-const {
-  Client,
-  GatewayIntentBits,
-  Events,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
@@ -19,6 +10,16 @@ const {
   REST,
   Routes
 } = require("discord.js");
+
+require("dotenv").config();
+
+const {
+  listVps,
+  getInfo,
+  startVps,
+  stopVps,
+  restartVps
+} = require("./docker");
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const ADMIN_ID = process.env.ADMIN_ID;
