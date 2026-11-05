@@ -1,240 +1,345 @@
 
-'use strict';
+"use strict";
 
-const { execFile } = require('node:child_process');
-const { promisify } = require('node:util');
-const crypto = require('node:crypto');
+const { execFile, spawn } = require("child_process");
+const { promisify } = require("util");
+const crypto = require("crypto");
 
 const exec = promisify(execFile);
 
-const IMAGES = {
-  ubuntu: 'ubuntu:24.04',
-  debian: 'debian:bookworm-slim'
+const PREFIX = "kmvps-";
+
+const OS_IMAGES = {
+  ubuntu2204: {
+    name: "Ubuntu 22.04 LTS",
+    image: "ubuntu:22.04"
+  },
+  ubuntu2404: {
+    name: "Ubuntu 24.04 LTS",
+    image: "ubuntu:24.04"
+  },
+  debian11: {
+    name: "Debian 11",
+    image: "debian:11"
+  },
+  debian12: {
+    name: "Debian 12 (Bookworm)",
+    image: "debian:12"
+  }
 };
 
-const PREFIX = 'kmvps-';
-
-function validateSpecs({ ram, cpu, disk }) {
-  const memory = Number(ram);
-  const cores = Number(cpu);
-  const storage = Number(disk);
-
-  if (!Number.isFinite(memory) || memory < 1 || memory > 32) {
-    throw new Error('RAM must be between 1 and 32 GB.');
-  }
-
-  if (!Number.isFinite(cores) || cores < 0.5 || cores > 16) {
-    throw new Error('CPU must be between 0.5 and 16 cores.');
-  }
-
-  if (!Number.isInteger(storage) || storage < 5 || storage > 500) {
-    throw new Error('Disk must be between 5 and 500 GB.');
-  }
-
-  return { memory, cores, storage };
+function randomPassword() {
+  return crypto.randomBytes(18).toString("base64url");
 }
 
-function safeId(value) {
-  const id = String(value || '');
-
-  if (!/^\d{17,20}$/.test(id)) {
-    throw new Error('Invalid Discord user ID.');
+function safeId(id) {
+  if (!/^\d{17,20}$/.test(String(id))) {
+    throw new Error("Invalid Discord user ID.");
   }
-
-  return id;
+  return String(id);
 }
 
-async function docker(args) {
+function validateSpecs(ram, cpu, disk) {
+  ram = Number(ram);
+  cpu = Number(cpu);
+  disk = Number(disk);
+
+  if (!Number.isFinite(ram) || ram < 1 || ram > 32) {
+    throw new Error("RAM must be between 1 and 32 GB.");
+  }
+
+  if (!Number.isFinite(cpu) || cpu < 0.5 || cpu > 16) {
+    throw new Error("CPU must be between 0.5 and 16 cores.");
+  }
+
+  if (!Number.isInteger(disk) || disk < 5 || disk > 500) {
+    throw new Error("Disk must be between 5 and 500 GB.");
+  }
+
+  return { ram, cpu, disk };
+}
+
+async function docker(args, options = {}) {
   try {
-    const { stdout } = await exec('docker', args, {
-      timeout: 120000,
-      maxBuffer: 5 * 1024 * 1024
+    const result = await exec("docker", args, {
+      timeout: options.timeout || 120000,
+      maxBuffer: 10 * 1024 * 1024
     });
 
-    return stdout.trim();
+    return result.stdout.trim();
   } catch (error) {
     throw new Error(
       error.stderr?.trim() ||
       error.message ||
-      'Docker command failed.'
+      "Docker command failed."
     );
   }
 }
 
-async function checkDocker() {
-  await docker(['version', '--format', '{{.Server.Version}}']);
+function dockerWithInput(args, input) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("docker", args, {
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", data => stdout += data);
+    child.stderr.on("data", data => stderr += data);
+
+    child.on("error", reject);
+
+    child.on("close", code => {
+      if (code !== 0) {
+        reject(new Error(stderr.trim() || "Docker command failed."));
+      } else {
+        resolve(stdout.trim());
+      }
+    });
+
+    child.stdin.end(input);
+  });
 }
 
-function makeName(userId) {
-  return `${PREFIX}${userId}-${Date.now()}`;
-}
-
-async function createVps({ userId, os, ram, cpu, disk }) {
-  userId = safeId(userId);
-
-  const imageKey = String(os || '').toLowerCase();
-
-  if (!IMAGES[imageKey]) {
-    throw new Error('Supported operating systems: Ubuntu and Debian.');
+function containerName(name) {
+  if (
+    typeof name !== "string" ||
+    !/^kmvps-\d{17,20}-\d+$/.test(name)
+  ) {
+    throw new Error("Invalid VPS name.");
   }
 
-  const specs = validateSpecs({ ram, cpu, disk });
-
-  await checkDocker();
-
-  const name = makeName(userId);
-  const password = crypto.randomBytes(24).toString('base64url');
-
-  const setupScript = [
-    'set -e',
-    'export DEBIAN_FRONTEND=noninteractive',
-    'apt-get update',
-    'apt-get install -y openssh-server ca-certificates curl',
-    'mkdir -p /run/sshd',
-    'ssh-keygen -A',
-    'printf "%s\\n" "root:${ROOT_PASSWORD}" | chpasswd',
-    'mkdir -p /etc/ssh/sshd_config.d',
-    'printf "%s\\n" "PermitRootLogin yes" "PasswordAuthentication yes" > /etc/ssh/sshd_config.d/99-kmdev.conf',
-    'exec /usr/sbin/sshd -D -e'
-  ].join(' && ');
-
-  const args = [
-    'run',
-    '-d',
-    '--init',
-    '--name', name,
-    '--restart', 'unless-stopped',
-    '--memory', `${specs.memory}g`,
-    '--cpus', String(specs.cores),
-    '--pids-limit', '512',
-    '--security-opt', 'no-new-privileges',
-    '--cap-drop', 'ALL',
-    '--cap-add', 'CHOWN',
-    '--cap-add', 'SETUID',
-    '--cap-add', 'SETGID',
-    '--cap-add', 'NET_BIND_SERVICE',
-    '--cap-add', 'SYS_CHROOT',
-    '--cap-add', 'DAC_OVERRIDE',
-    '--publish', '22',
-    '--label', `kmdev.owner=${userId}`,
-    '--label', `kmdev.os=${imageKey}`,
-    '--label', `kmdev.disk_gb=${specs.storage}`,
-    '--env', `ROOT_PASSWORD=${password}`,
-    IMAGES[imageKey],
-    'bash',
-    '-lc',
-    setupScript
-  ];
-
-  const containerId = await docker(args);
-
-  return {
-    id: containerId,
-    name,
-    userId,
-    os: imageKey,
-    ram: specs.memory,
-    cpu: specs.cores,
-    disk: specs.storage,
-    password
-  };
+  return name;
 }
 
 async function getContainer(name) {
-  if (!String(name).startsWith(PREFIX)) {
-    throw new Error('Invalid container name.');
-  }
+  name = containerName(name);
 
   const output = await docker([
-    'inspect',
-    '--format',
-    '{{json .}}',
+    "inspect",
+    "--format",
+    "{{json .Config.Labels}}",
     name
   ]);
 
-  return JSON.parse(output);
+  return JSON.parse(output || "{}");
 }
 
-async function getInfo(name) {
-  const info = await getContainer(name);
+async function createVps({
+  userId,
+  os,
+  ram,
+  cpu,
+  disk
+}) {
+  userId = safeId(userId);
 
-  const port = info.NetworkSettings?.Ports?.['22/tcp']?.[0]?.HostPort || null;
+  const specs = validateSpecs(ram, cpu, disk);
 
-  return {
-    name: info.Name.replace(/^\//, ''),
-    id: info.Id,
-    status: info.State.Status,
-    running: info.State.Running,
-    ip: info.NetworkSettings?.IPAddress || null,
-    sshPort: port,
-    os: info.Config.Labels['kmdev.os'],
-    owner: info.Config.Labels['kmdev.owner'],
-    disk: info.Config.Labels['kmdev.disk_gb']
-  };
-}
+  const selectedOS = OS_IMAGES[os];
 
-async function startVps(name) {
-  await getContainer(name);
-  return docker(['start', name]);
-}
+  if (!selectedOS) {
+    throw new Error("Unsupported operating system.");
+  }
 
-async function stopVps(name) {
-  await getContainer(name);
-  return docker(['stop', '--time', '15', name]);
-}
+  const name = `${PREFIX}${userId}-${Date.now()}`;
+  const password = randomPassword();
 
-async function restartVps(name) {
-  await getContainer(name);
-  return docker(['restart', '--time', '15', name]);
-}
+  await docker([
+    "pull",
+    selectedOS.image
+  ], { timeout: 600000 });
 
-async function deleteVps(name) {
-  await getContainer(name);
-  await docker(['rm', '-f', name]);
-  return true;
+  const startupScript = [
+    "set -e",
+    "if [ ! -f /var/lib/kmdev-ssh-ready ]; then",
+    "  export DEBIAN_FRONTEND=noninteractive",
+    "  apt-get update",
+    "  apt-get install -y openssh-server",
+    "  mkdir -p /run/sshd",
+    "  touch /var/lib/kmdev-ssh-ready",
+    "fi",
+    "mkdir -p /run/sshd",
+    "exec /usr/sbin/sshd -D -e"
+  ].join("\n");
+
+  await docker([
+    "run",
+    "-d",
+    "--name", name,
+    "--hostname", name,
+    "--restart", "unless-stopped",
+    "--memory", `${specs.ram}g`,
+    "--memory-swap", `${specs.ram}g`,
+    "--cpus", String(specs.cpu),
+    "--pids-limit", "256",
+    "--publish", "0.0.0.0::22",
+    "--label", `kmdev.owner=${userId}`,
+    "--label", `kmdev.os=${selectedOS.name}`,
+    "--label", `kmdev.disk_gb=${specs.disk}`,
+    "--label", `kmdev.ram_gb=${specs.ram}`,
+    "--label", `kmdev.cpu=${specs.cpu}`,
+    selectedOS.image,
+    "bash",
+    "-lc",
+    startupScript
+  ]);
+
+  try {
+    let ready = false;
+
+    for (let i = 0; i < 120; i++) {
+      try {
+        await docker([
+          "exec",
+          name,
+          "test",
+          "-f",
+          "/var/lib/kmdev-ssh-ready"
+        ]);
+
+        ready = true;
+        break;
+      } catch {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
+
+    if (!ready) {
+      throw new Error("SSH setup timed out.");
+    }
+
+    await dockerWithInput(
+      ["exec", "-i", name, "chpasswd"],
+      `root:${password}\n`
+    );
+
+    const portOutput = await docker([
+      "port",
+      name,
+      "22/tcp"
+    ]);
+
+    const match = portOutput.match(/:(\d+)\s*$/);
+
+    if (!match) {
+      throw new Error("Could not determine SSH port.");
+    }
+
+    return {
+      id: name,
+      name,
+      os: selectedOS.name,
+      ram: specs.ram,
+      cpu: specs.cpu,
+      disk: specs.disk,
+      sshPort: Number(match[1]),
+      password
+    };
+  } catch (error) {
+    try {
+      await docker(["rm", "-f", name]);
+    } catch {}
+    throw error;
+  }
 }
 
 async function listVps(userId) {
   userId = safeId(userId);
 
   const output = await docker([
-    'ps',
-    '-a',
-    '--filter', `label=kmdev.owner=${userId}`,
-    '--format', '{{.Names}}'
+    "ps",
+    "-a",
+    "--filter",
+    `label=kmdev.owner=${userId}`,
+    "--format",
+    "{{.Names}}"
   ]);
 
   return output
-    ? output.split('\n').filter(Boolean)
+    ? output.split("\n").filter(Boolean)
     : [];
 }
 
-async function backupVps(name, destination) {
-  await getContainer(name);
+async function getInfo(name) {
+  name = containerName(name);
 
-  if (!/^\/[a-zA-Z0-9/_-]+\.tar$/.test(destination)) {
-    throw new Error('Backup destination must be an absolute .tar path.');
-  }
-
-  await docker([
-    'export',
-    '--output',
-    destination,
+  const output = await docker([
+    "inspect",
+    "--format",
+    "{{json .}}",
     name
   ]);
 
-  return destination;
+  const info = JSON.parse(output);
+  const labels = info.Config.Labels || {};
+
+  const portOutput = await docker([
+    "port",
+    name,
+    "22/tcp"
+  ]).catch(() => "");
+
+  const match = portOutput.match(/:(\d+)\s*$/);
+
+  return {
+    name,
+    status: info.State.Status,
+    running: info.State.Running,
+    os: labels["kmdev.os"] || "Unknown",
+    ram: labels["kmdev.ram_gb"] || "Unknown",
+    cpu: labels["kmdev.cpu"] || "Unknown",
+    disk: labels["kmdev.disk_gb"] || "Unknown",
+    ip: info.NetworkSettings.IPAddress || "Unavailable",
+    sshPort: match ? Number(match[1]) : null,
+    owner: labels["kmdev.owner"] || "Unknown"
+  };
+}
+
+async function startVps(name) {
+  name = containerName(name);
+  await docker(["start", name]);
+  return true;
+}
+
+async function stopVps(name) {
+  name = containerName(name);
+  await docker(["stop", name]);
+  return true;
+}
+
+async function restartVps(name) {
+  name = containerName(name);
+  await docker(["restart", name]);
+  return true;
+}
+
+async function deleteVps(name) {
+  name = containerName(name);
+  await docker(["rm", "-f", name]);
+  return true;
+}
+
+async function backupVps(name) {
+  name = containerName(name);
+
+  const output = await docker([
+    "export",
+    name
+  ], { timeout: 600000 });
+
+  return output;
 }
 
 module.exports = {
-  checkDocker,
+  OS_IMAGES,
   createVps,
+  listVps,
   getInfo,
   startVps,
   stopVps,
   restartVps,
   deleteVps,
-  listVps,
   backupVps
 };
-    
