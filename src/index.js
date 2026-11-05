@@ -1,3 +1,9 @@
+const {
+  Client,
+  GatewayIntentBits,
+  Events,
+  // ...
+} = require("discord.js");
 
 require("dotenv").config();
 
