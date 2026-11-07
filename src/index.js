@@ -351,7 +351,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         case "create":
           return interaction.reply({
-            content: "VPS creation backend is not connected yet.",
+            content: "Use `!create <ram> <cpu> <disk> [@user]` to start VPS deployment.",
             ephemeral: true
           });
 
