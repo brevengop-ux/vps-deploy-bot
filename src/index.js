@@ -207,10 +207,72 @@ client.on(Events.MessageCreate, async (message) => {
           components: manageRows()
         });
 
-      case "create":
-        return message.reply(
-          "VPS creation backend is not connected yet."
-        );
+      
+case "create": {
+  if (message.author.id !== process.env.ADMIN_ID) {
+    return message.reply("Only admins can create VPS.");
+  }
+
+  const ram = Number(args[0]);
+  const cpu = Number(args[1]);
+  const disk = Number(args[2]);
+  const target = message.mentions.users.first() || message.author;
+
+  if (
+    !Number.isFinite(ram) ||
+    !Number.isFinite(cpu) ||
+    !Number.isInteger(disk) ||
+    ram < 1 || ram > 32 ||
+    cpu < 0.5 || cpu > 16 ||
+    disk < 5 || disk > 500
+  ) {
+    return message.reply(
+      "Usage: `!create <ram> <cpu> <disk> [@user]`\n" +
+      "Example: `!create 2 1 20`"
+    );
+  }
+
+  const { StringSelectMenuBuilder } = require("discord.js");
+
+  const osMenu = new StringSelectMenuBuilder()
+    .setCustomId(
+      `create_os:${message.author.id}:${target.id}:${ram}:${cpu}:${disk}`
+    )
+    .setPlaceholder("Select Operating System")
+    .addOptions(
+      {
+        label: "Ubuntu 22.04 LTS",
+        value: "ubuntu2204"
+      },
+      {
+        label: "Ubuntu 24.04 LTS",
+        value: "ubuntu2404"
+      },
+      {
+        label: "Debian 11",
+        value: "debian11"
+      },
+      {
+        label: "Debian 12 (Bookworm)",
+        value: "debian12"
+      }
+    );
+
+  return message.reply({
+    content:
+      "**KM DEV — VPS DEPLOYMENT**\n" +
+      `RAM: ${ram} GB | CPU: ${cpu} Core | Disk: ${disk} GB\n` +
+      `User: ${target.tag}\n\n` +
+      "Select an operating system for your VPS:",
+    components: [
+      {
+        type: 1,
+        components: [osMenu]
+      }
+    ]
+  });
+}
+        
 
       case "list":
         return message.reply(
